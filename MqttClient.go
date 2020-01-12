@@ -2,7 +2,11 @@ package MqttPool
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
+	"math/rand"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -13,21 +17,58 @@ import (
 )
 
 type MqttClient struct {
-	c      mqtt.Client
-	rwlock sync.RWMutex //lock for client
+	c mqtt.Client
 }
 
 var gMqttClientOnce sync.Once
 var gMqttClient *MqttClient
 
+var gGetHostNameOnce sync.Once
+var gHostName string
+
+func getHostName(NeedRand bool) string {
+	gGetHostNameOnce.Do(func() {
+		var err error
+		gHostName, err = os.Hostname()
+		if err != nil {
+			gHostName = ""
+
+			rand.Seed(time.Now().UnixNano())
+
+			var NamePart = make([]string, 8)
+			//生成10个0-99之间的随机数
+			for i := 0; i < 7; i++ {
+				NamePart[i] = fmt.Sprintf("%d", rand.Intn(10))
+			}
+
+			gHostName = strings.Join(NamePart, "")
+
+			//TODO: 将主机名写入到配置文件中
+		} else {
+			if NeedRand {
+				rand.Seed(time.Now().UnixNano())
+
+				var NamePart = make([]string, 8)
+				//生成10个0-99之间的随机数
+				for i := 0; i < 7; i++ {
+					NamePart[i] = fmt.Sprintf("%d", rand.Intn(10))
+				}
+
+				gHostName += strings.Join(NamePart, "")
+			}
+		}
+	})
+	return gHostName
+}
+
 //Init once.
-func InitMqttClient() *MqttClient {
+func InitMqttClient(clientIds ...string) *MqttClient {
 	gMqttClientOnce.Do(func() {
 
 		vServerUrl := g.Cfg().Get("client.mqtt-server")
 
 		if vServerUrl == nil {
-			log.Println("No client.mqtt_server defined.")
+			log.Println("No client.mqtt-server defined.")
 			return
 		}
 
@@ -35,9 +76,15 @@ func InitMqttClient() *MqttClient {
 
 			serverUrl := vServerUrl.(string)
 
-			gMqttClient = newMqttClient(serverUrl, "txt1234")
+			var clientId string
+			if len(clientIds) == 0 {
+				clientId = getHostName(true)
+			} else {
+				clientId = clientIds[0]
+			}
 
-			//gMqttClient.Connect(3, 1)
+			gMqttClient = newMqttClient(serverUrl, clientId)
+
 		}
 	})
 	return gMqttClient
@@ -52,6 +99,26 @@ func newMqttClient(serverUri, clientId string) *MqttClient {
 
 	// set the id to the client.
 	opts.SetClientID(clientId)
+
+	opts.SetAutoReconnect(true)
+
+	opts.SetKeepAlive(60 * time.Second)
+
+	opts.SetMaxReconnectInterval(1 * time.Second)
+
+	//连接丢失处理
+	opts.SetConnectionLostHandler(func(mqtt.Client, error) {
+		log.Printf("Connection Lost.\n")
+	})
+
+	//连接成功处理
+	opts.SetOnConnectHandler(func(mqtt.Client) {
+		log.Printf("Connection created.\n")
+	})
+
+	opts.SetReconnectingHandler(func(mqtt.Client, *mqtt.ClientOptions) {
+		log.Printf("Connection recreating.\n")
+	})
 
 	//support ssl protocol.
 	if strings.HasPrefix(serverUri, "ssl://") {
@@ -73,21 +140,12 @@ func newMqttClient(serverUri, clientId string) *MqttClient {
 //try connect with failed retry interval.
 func (mqttClient MqttClient) Connect(nRetry int, nInterval time.Duration) bool {
 
-	log.Println("mqttClient Connecting")
-
-	mqttClient.rwlock.RLock()
-
 	if mqttClient.c.IsConnected() {
-		log.Println("mqttClient connected.")
+		//log.Println("mqttClient connected.")
 		return true
-	} else {
-		log.Println("mqttClient disconnected.")
 	}
 
-	mqttClient.rwlock.RUnlock()
-
 	//we are going to try connecting for max 10 times to the server if the connection fails.
-	mqttClient.rwlock.Lock()
 
 	for i := 0; i < nRetry; i++ {
 
@@ -96,6 +154,7 @@ func (mqttClient MqttClient) Connect(nRetry int, nInterval time.Duration) bool {
 			log.Printf("mqttClient token =nil\n")
 		} else {
 			if token.Wait() && token.Error() == nil {
+				runtime.GC()
 				return true
 			} else {
 				log.Printf("MqttClient Connect Error:%s\r\n", token.Error())
@@ -103,7 +162,7 @@ func (mqttClient MqttClient) Connect(nRetry int, nInterval time.Duration) bool {
 			}
 		}
 	}
-	mqttClient.rwlock.Unlock()
+
 	return false
 }
 
@@ -146,7 +205,29 @@ func MqttPublishMsg(mqttContext *MqttContext, nReconnectLimit int, nRetryInterva
 
 	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
 		mqttClient.Publish(mqttContext.Topic, &mqttContext.Message)
-
 		log.Println("msg published.")
 	}
+}
+
+func MqttPublishMsgRet(mqttContext *MqttContext, nReconnectLimit int, nRetryInterval time.Duration) bool {
+
+	mqttClient := InitMqttClient()
+
+	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
+		mqttClient.Publish(mqttContext.Topic, &mqttContext.Message)
+		return true
+	}
+	return false
+}
+
+func MqttSubscribeTopic(nReconnectLimit int, nRetryInterval time.Duration,
+	topic string, callback mqtt.MessageHandler) {
+
+	mqttClient := InitMqttClient()
+
+	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
+		mqttClient.Subscribe(topic, callback)
+		log.Println("Topic " + topic + " subscribed.")
+	}
+
 }
