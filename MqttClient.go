@@ -6,7 +6,8 @@ import (
 	"log"
 	"math/rand"
 	"os"
-	"runtime"
+
+	//"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -104,7 +105,7 @@ func newMqttClient(serverUri, clientId string) *MqttClient {
 
 	opts.SetKeepAlive(60 * time.Second)
 
-	opts.SetMaxReconnectInterval(1 * time.Second)
+	opts.SetMaxReconnectInterval(30 * time.Second)
 
 	//连接丢失处理
 	opts.SetConnectionLostHandler(func(mqtt.Client, error) {
@@ -138,26 +139,26 @@ func newMqttClient(serverUri, clientId string) *MqttClient {
 }
 
 //try connect with failed retry interval.
-func (mqttClient MqttClient) Connect(nRetry int, nInterval time.Duration) bool {
+func (mqttClient MqttClient) Connect(nInterval time.Duration) bool {
 
 	if mqttClient.c.IsConnected() {
 		//log.Println("mqttClient connected.")
 		return true
 	}
 
-	//we are going to try connecting for max 10 times to the server if the connection fails.
+	var iPos = 0
+	for {
 
-	for i := 0; i < nRetry; i++ {
+		iPos++
 
 		token := mqttClient.c.Connect()
 		if token == nil {
 			log.Printf("mqttClient token =nil\n")
 		} else {
 			if token.Wait() && token.Error() == nil {
-				runtime.GC()
 				return true
 			} else {
-				log.Printf("MqttClient Connect Error:%s\r\n", token.Error())
+				log.Printf("MqttClient Connect %d Error:%s\r\n", iPos, token.Error())
 				time.Sleep(nInterval)
 			}
 		}
@@ -199,35 +200,61 @@ func (mqttClient MqttClient) Subscribe(topic string, callback mqtt.MessageHandle
 	return false
 }
 
-func MqttPublishMsg(mqttContext *MqttContext, nReconnectLimit int, nRetryInterval time.Duration) {
+func MqttPublishMsg(mqttContext *MqttContext, nRetryInterval time.Duration) bool {
 
+	var bCompleted bool
 	mqttClient := InitMqttClient()
 
-	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
+	if mqttClient.Connect(nRetryInterval) {
 		mqttClient.Publish(mqttContext.Topic, &mqttContext.Message)
 		log.Println("msg published.")
+		bCompleted = true
+	} else {
+		bCompleted = false
 	}
+
+	return bCompleted
 }
 
-func MqttPublishMsgRet(mqttContext *MqttContext, nReconnectLimit int, nRetryInterval time.Duration) bool {
+func MqttPublishMsgRet(mqttContext *MqttContext, nRetryInterval time.Duration) bool {
+
+	var bCompleted bool
 
 	mqttClient := InitMqttClient()
 
-	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
+	if mqttClient.Connect(nRetryInterval) {
 		mqttClient.Publish(mqttContext.Topic, &mqttContext.Message)
-		return true
+		bCompleted = true
+	} else {
+
+		bCompleted = false
 	}
-	return false
+
+	return bCompleted
 }
 
-func MqttSubscribeTopic(nReconnectLimit int, nRetryInterval time.Duration,
-	topic string, callback mqtt.MessageHandler) {
+func MqttSubscribeTopic(nRetryInterval time.Duration,
+	topic string, callback mqtt.MessageHandler) (bool, bool) {
+
+	var bConnected, bCompleted bool
 
 	mqttClient := InitMqttClient()
 
-	if mqttClient.Connect(nReconnectLimit, nRetryInterval) {
+	if mqttClient.Connect(nRetryInterval) {
+
+		bConnected = true
+
 		mqttClient.Subscribe(topic, callback)
 		log.Println("Topic " + topic + " subscribed.")
+
+		bCompleted = true
+
+	} else {
+
+		bConnected = false
+		bCompleted = false
+
 	}
 
+	return bConnected, bCompleted
 }
