@@ -216,33 +216,14 @@ func MqttPublishMsg(mqttContext *MqttContext, nRetryInterval time.Duration) bool
 	return bCompleted
 }
 
-func MqttPublishMsgRet(mqttContext *MqttContext, nRetryInterval time.Duration) bool {
+func MqttSubscribeTopic(nRetryInterval time.Duration,
+	topic string, callback mqtt.MessageHandler) bool {
 
 	var bCompleted bool
 
 	mqttClient := InitMqttClient()
 
 	if mqttClient.Connect(nRetryInterval) {
-		mqttClient.Publish(mqttContext.Topic, &mqttContext.Message)
-		bCompleted = true
-	} else {
-
-		bCompleted = false
-	}
-
-	return bCompleted
-}
-
-func MqttSubscribeTopic(nRetryInterval time.Duration,
-	topic string, callback mqtt.MessageHandler) (bool, bool) {
-
-	var bConnected, bCompleted bool
-
-	mqttClient := InitMqttClient()
-
-	if mqttClient.Connect(nRetryInterval) {
-
-		bConnected = true
 
 		mqttClient.Subscribe(topic, callback)
 		log.Println("Topic " + topic + " subscribed.")
@@ -251,10 +232,9 @@ func MqttSubscribeTopic(nRetryInterval time.Duration,
 
 	} else {
 
-		bConnected = false
 		bCompleted = false
 
 	}
 
-	return bConnected, bCompleted
+	return bCompleted
 }
